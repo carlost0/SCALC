@@ -29,20 +29,29 @@
 #include <string.h>
 #include <math.h>
 #include <ctype.h>
-
+#include <errno.h>
 
 #define MAX_STACK_SIZE 1024
 #define MAX_TOKEN_SIZE 512
 
-typedef char Bool;
-#define True 1
-#define False 0
+#define ASSERT(c) do { \
+    if (!(c)) { \
+        fprintf(stderr, "%s:%d: Failed to assert '"#c"'\n", __FILE__, __LINE__); \
+        abort(); \
+    } \
+} while (0);
+/* Custom Boolean type for C90 */
+#ifndef __STDC_VERSION__
+typedef enum bool { false, true } bool;
+#else 
+#include <stdbool.h>
+#endif /* __STDC_VERSION__ */
 
 
+/* Status Codes */
 typedef enum Status {
     SUCCESS,
     QUIT,
-    FAILED_MALLOC,
     BAD_PTR,
     STACK_OVERFLOW,
     UNEXPECTED_SYMBOL,
@@ -51,6 +60,7 @@ typedef enum Status {
 } Status;
 
 
+/* Possible Operations */
 typedef enum Op {
     OP_NONE,
     OP_ADD,
@@ -70,14 +80,18 @@ typedef enum Op {
     _OP_COUNT
 } Op;
 
+/* Amount of inputs for each operation */
 static const size_t op_input_amount[_OP_COUNT] = {
     0, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1
 };
 
+
+/* Some Constants */
 typedef enum Constant {
     CONST_NULL,
     CONST_PI,
     CONST_E,
+    CONST_PHI,
     CONST_INF,
     _CONST_COUNT
 } Constant;
@@ -86,6 +100,7 @@ static const double constants[_CONST_COUNT] = {
     0.0f,
     3.14159265358979323846f,
     2.71828182845904523536f,
+    1.618033988749,   
     INFINITY
 };
 
@@ -125,12 +140,13 @@ typedef struct Stack {
 
 static Stack stack;
 
+bool        streq(const char *a, const char *b);
 
 void        print_help(void);
 void        print_usage(const char *program);
 void        print_ops(void);
 
-Bool        is_number(const char *s);
+bool        is_number(const char *s);
 char       *read_line(size_t *out_length);
 char       *file_to_str(const char *filename);
 char       *trim_str(char *str);
@@ -146,7 +162,7 @@ size_t op_get_input_amount(Op op);
 
 
 Symbol symbol_print(Symbol s);
-Symbol symbol_print_top(Bool pop);
+Symbol symbol_print_top(bool pop);
 void   stack_print(void);
 
 Status symbol_push(Symbol s);
@@ -155,16 +171,13 @@ Symbol symbol_get(void);
 
 Status cmd_eval(Command cmd);
 
-Status stack_eval_top(double *res, Bool pop);
+Status stack_eval_top(double *res, bool pop);
 
 Status eval_string(const char *str);
 
-void print_usage(const char *programm) {
-    printf("usage:\n");
-    printf("%s [-h] [--file file.scalc] \n", programm);
-    printf("  -h: print this message\n");
-    printf("  --file: evaluate a file\n");
-    printf("  no options: read and evaluate from stdin\n");
+
+bool streq(const char *a, const char *b) {
+    return strcmp(a, b) == 0;
 }
 
 void print_help(void) {
@@ -191,6 +204,14 @@ void print_help(void) {
     printf("'pi': pi\n");
     printf("'euler': euler's number\n");
     printf("'inf': infinity\n");
+}
+
+void print_usage(const char *programm) {
+    printf("usage:\n");
+    printf("%s [-h] [--file file.scalc] \n", programm);
+    printf("  -h: print this message\n");
+    printf("  --file: evaluate a file\n");
+    printf("  no options: read and evaluate from stdin\n");
 }
 
 void print_ops(void) {
@@ -228,11 +249,7 @@ char *file_to_str(const char *filename) {
     fseek(file, 0, SEEK_SET);
 
     buf = (char *) malloc((file_size + 1) * sizeof(char));
-
-    if (!buf) {
-        fclose(file);
-        return NULL;
-    }
+    ASSERT(buf && "failed malloc");
 
     fread(buf, 1, file_size, file);
     buf[file_size] = '\0';
@@ -282,10 +299,9 @@ char *read_line(size_t *out_length) {
 
     length = 0;
     capacity = 1024;
-    buf = (char *) malloc(capacity*sizeof(char));
+    buf = (char *) malloc(capacity * sizeof(char));
 
-    if (buf == NULL)
-        return NULL;
+    ASSERT(buf && "failed malloc");
 
 
     while ((c = getc(stdin)) != '\n') {
@@ -293,7 +309,7 @@ char *read_line(size_t *out_length) {
             char *tmp;
             capacity *= 2;
 
-            tmp = realloc(buf, capacity*sizeof(char));
+            tmp = realloc(buf, capacity * sizeof(char));
             if (tmp == NULL) {
                 free(buf);
                 return NULL;
@@ -315,10 +331,6 @@ char *read_line(size_t *out_length) {
 
 const char *err_to_string(Status err) {
     switch (err) {
-        case SUCCESS: 
-            return "No Error";
-        case FAILED_MALLOC: 
-            return "Failed Malloc (buy more ram lol)";
         case QUIT:
             return "Quit";
         case BAD_PTR:
@@ -331,10 +343,12 @@ const char *err_to_string(Status err) {
             return "Unexpected Symbol";
         case DIVISION_BY_ZERO:
             return "Division by Zero";
+        default: 
+            return "No Error";
     }
 }
 
-Bool is_number(const char *s) {
+bool is_number(const char *s) {
     size_t i, n, point_counter;
     
     point_counter = 0;
@@ -347,7 +361,7 @@ Bool is_number(const char *s) {
     }
 
     if (n <= 1 && i > 0) {
-        return False;
+        return false;
     }
 
     for (; i < n; ++i) {
@@ -356,15 +370,15 @@ Bool is_number(const char *s) {
         }
 
         if (point_counter > 1) {
-            return False;
+            return false;
         }
 
         if (!isdigit(s[i]) && s[i] != '.') {
-            return False;
+            return false;
         }
     }
 
-    return True;
+    return true;
 }
 
 double factorial(double n) {
@@ -381,33 +395,33 @@ double factorial(double n) {
     return res;
 }
 Op str_to_op(const char *s) {
-    if (!(strcmp("+", s) && strcmp("add", s))) {
+    if (streq("+", s) || streq("add", s)) {
         return OP_ADD;
-    } else if (!(strcmp("-", s) && strcmp("sub", s))) {
+    } else if (streq("-", s) || streq("sub", s)) {
         return OP_SUB;
-    } else if (!(strcmp("*", s) && strcmp("mul", s))) {
+    } else if (streq("*", s) || streq("mul", s)) {
         return OP_MUL;
-    } else if (!(strcmp("/", s) && strcmp("div", s))) {
+    } else if (streq("/", s) || streq("div", s)) {
         return OP_DIV;
-    } else if (!(strcmp("mod", s) && strcmp("%", s))) {
+    } else if (streq("mod", s) || streq("%", s)) {
         return OP_MOD;
-    } else if (!(strcmp("pow", s) && strcmp("^", s))) {
+    } else if (streq("pow", s) || streq("^", s)) {
         return OP_POW;
-    } else if (!(strcmp("sqrt", s) && strcmp("v/", s))) {
+    } else if (streq("sqrt", s) || streq("v/", s)) {
         return OP_SQRT;
-    } else if (!strcmp("ln", s)) {
+    } else if (streq("ln", s)) {
         return OP_LN;
-    } else if (!strcmp("log", s)) {
+    } else if (streq("log", s)) {
         return OP_LOG;
-    } else if (!strcmp("sin", s)) {
+    } else if (streq("sin", s)) {
         return OP_SIN;
-    } else if (!strcmp("cos", s)) {
+    } else if (streq("cos", s)) {
         return OP_COS;
-    } else if (!strcmp("tan", s)) {
+    } else if (streq("tan", s)) {
         return OP_TAN;
-    } else if (!strcmp("atan", s)) {
+    } else if (streq("atan", s)) {
         return OP_ATAN;
-    } else if (!(strcmp("factorial", s) && strcmp("!", s))) {
+    } else if (streq("factorial", s) || streq("!", s)) {
         return OP_FACTORIAL;
     }
 
@@ -415,38 +429,40 @@ Op str_to_op(const char *s) {
 }
 
 Constant str_to_const(const char *s) {
-    if (!strcmp("pi", s)) {
+    if (streq("pi", s) || streq("π", s)) {
         return CONST_PI;
-    } else if (!strcmp("euler", s)) {
+    } else if (streq("euler", s)) {
         return CONST_E;
-    } else if (!strcmp("inf", s)) {
+    } else if (streq("inf", s) || streq("∞", s)) {
         return CONST_INF;
+    } else if (streq("phi", s) || streq("φ", s)) {
+        return CONST_PHI;
     }
 
     return CONST_NULL;
 }
 Command str_to_cmd(const char *s) {
-    if (!strcmp(s, "ls")) {
+    if (streq(s, "ls")) {
         return CMD_LS;
-    } else if (!strcmp(s, "p")) {
+    } else if (streq(s, "p")) {
         return CMD_PRINT;
-    } else if (!(strcmp(s, "s") && strcmp(s, "swap"))) {
+    } else if (streq(s, "s") || streq(s, "swap")) {
         return CMD_SWAP;
-    } else if (!strcmp(s, "P")) {
+    } else if (streq(s, "P")) {
         return CMD_PRINT_AND_POP;
-    } else if (!(strcmp(s, "dup") && strcmp(s, "d"))) {
+    } else if (streq(s, "dup") || streq(s, "d")) {
         return CMD_DUP;
-    } else if (!strcmp(s, "cls")) {
+    } else if (streq(s, "cls")) {
         return CMD_CLEAR_SCREEN;
-    } else if (!strcmp(s, "c")) {
+    } else if (streq(s, "c")) {
         return CMD_CLEAR_STACK;
-    } else if (!strcmp(s, "ops")) {
+    } else if (streq(s, "ops")) {
         return CMD_PRINT_OPS;
-    } else if (!(strcmp(s, "h") && strcmp(s, "help"))) {
+    } else if (streq(s, "h") || streq(s, "help")) {
         return CMD_PRINT_HELP;
-    } else if (!(strcmp(s, "q") && strcmp(s, "quit"))) {
+    } else if (streq(s, "q") || streq(s, "quit")) {
         return CMD_QUIT;
-    } else if (!(strcmp(s, "e") && strcmp(s, "eval"))) {
+    } else if (streq(s, "e") || streq(s, "eval")) {
         return CMD_EVAL_TOP;
     }
 
@@ -454,7 +470,7 @@ Command str_to_cmd(const char *s) {
 }
 
 Status symbol_push(Symbol s) {
-    if (stack.top + 1 == MAX_STACK_SIZE) {
+    if (stack.top + 1 >= MAX_STACK_SIZE) {
         return STACK_OVERFLOW;
     }
 
@@ -466,6 +482,7 @@ Symbol symbol_pop(void) {
     if (stack.top < 1) {
         return stack.data[stack.top];
     }
+
     return stack.data[--stack.top];
 }
 
@@ -535,17 +552,17 @@ Symbol symbol_print(Symbol s) {
             printf("\n");
             break;
         case S_NUMBER: 
-            printf("%lf\n", s.as.num);
+            printf("%f\n", s.as.num);
             break;
     }
     return s;
 }
 
-Symbol symbol_print_top(Bool pop) {
+Symbol symbol_print_top(bool pop) {
     if (pop) {
         return symbol_print(symbol_pop());
     } else {
-        return symbol_print(stack.data[stack.top-1]);
+        return symbol_print(stack.data[stack.top - 1]);
     }
 }
 
@@ -561,7 +578,7 @@ size_t op_get_input_amount(Op op) {
     return op_input_amount[op];
 }
 
-Status stack_eval_top(double *res, Bool pop) {
+Status stack_eval_top(double *res, bool pop) {
     Symbol s;
     Symbol a, b, ns;
     Op op;
@@ -575,7 +592,12 @@ Status stack_eval_top(double *res, Bool pop) {
     if (s.kind != S_OP) {
         return UNEXPECTED_SYMBOL;
     }
-    
+
+    a.kind = S_UNDEFINED;
+    a.as.op = OP_NONE;;
+
+    b.kind = S_UNDEFINED;
+    b.as.op = OP_NONE;;
 
     op = s.as.op;
 
@@ -728,11 +750,11 @@ Status cmd_eval(Command cmd) {
         } break;
 
         case CMD_PRINT: {
-            symbol_print_top(False);
+            symbol_print_top(false);
         } break;
 
         case CMD_PRINT_AND_POP: {
-            symbol_print_top(True);
+            symbol_print_top(true);
         } break;
 
         case CMD_PRINT_OPS: {
@@ -744,7 +766,7 @@ Status cmd_eval(Command cmd) {
         } break;
 
         case CMD_EVAL_TOP: {
-            stack_eval_top(NULL, False);
+            stack_eval_top(NULL, false);
         } break;
 
         case CMD_CLEAR_SCREEN: {
@@ -752,7 +774,7 @@ Status cmd_eval(Command cmd) {
         } break;
 
         case CMD_CLEAR_STACK: {
-            memset(stack.data, 0, MAX_STACK_SIZE);
+            memset(stack.data, 0, MAX_STACK_SIZE * sizeof(Symbol));
             stack.top = 0;
         } break;
 
@@ -770,9 +792,7 @@ Status eval_string(const char *sc) {
 
     sc_cpy = (char *) malloc(sizeof(char) * (strlen(sc) + 1));
 
-    if (!sc_cpy) {
-        return FAILED_MALLOC;
-    }
+    ASSERT(sc_cpy && "failed malloc");
 
     strcpy(sc_cpy, sc);
     token = strtok(sc_cpy, " \n\t\v");
@@ -800,7 +820,9 @@ Status eval_string(const char *sc) {
                 free(sc_cpy);
                 return status;
             }
-        } else if (!(strcmp(token, "q") && strcmp(token, "quit") && strcmp(token, "exit"))) {
+        } else if (streq(token, "q")
+                && streq(token, "quit")
+                && streq(token, "exit")) {
             free(sc_cpy);
             return QUIT;
         } else if (*token == EOF) {
@@ -820,13 +842,13 @@ Status eval_string(const char *sc) {
             s.kind = S_OP;
             s.as.op = str_to_op(token);
 
-            if (s.as.op == S_UNDEFINED) {
+            if (s.as.op == OP_NONE) {
                 free(sc_cpy);
                 return UNKNOWN_SYMBOL;
             }
 
             symbol_push(s);
-            status = stack_eval_top(NULL, False);
+            status = stack_eval_top(NULL, true);
 
             if (status != SUCCESS) {
                 free(sc_cpy);
@@ -849,7 +871,7 @@ int main(int argc, char **argv) {
             char *line;
 
             printf("\x1b[0;32m");
-            printf("[%zu]-$ ", stack.top);
+            printf("[%lu]-$ ", stack.top);
             fflush(stdout);
 
             line = read_line(NULL);
@@ -876,9 +898,9 @@ int main(int argc, char **argv) {
         return EXIT_SUCCESS;
     }
 
-    if (strcmp(argv[1], "-h") == 0) {
+    if (streq(argv[1], "-h")) {
         print_usage(argv[0]);
-    } else if (strcmp(argv[1], "--file") == 0) {
+    } else if (streq(argv[1], "--file")) {
         char *sc;
         Status status;
         if (argc != 3) {
@@ -889,7 +911,7 @@ int main(int argc, char **argv) {
         sc = file_to_str(argv[2]);
 
         if (!sc) {
-            fprintf(stderr, "\x1b[0;31mERROR: Unable to open file: %m");
+            fprintf(stderr, "\x1b[0;31mERROR: Unable to open file: %s", strerror(errno));
             return EXIT_FAILURE;
         }
 
